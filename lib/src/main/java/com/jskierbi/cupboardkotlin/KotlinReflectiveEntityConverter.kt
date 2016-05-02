@@ -13,7 +13,6 @@ import nl.qbusict.cupboard.convert.FieldConverter
 import nl.qbusict.cupboard.convert.ReflectiveEntityConverter
 import java.lang.reflect.Field
 import java.lang.reflect.Modifier
-import java.util.*
 import kotlin.reflect.KClass
 import kotlin.reflect.KFunction
 import kotlin.reflect.KParameter
@@ -33,94 +32,69 @@ class KotlinReflectiveEntityConverter<T : Any>(val cupboard: Cupboard,
         else ReflectiveEntityConverter(cupboard, type)
   }
 
-  private val mUseAnnotations by lazy { cupboard.isUseAnnotations }
-  private val mReflectTable by lazy {
+  val mTableName: String
+  val mColumns: List<ReflectColumn>
+  val mConstructor: KFunction<T>?
+  val mIdColumn: ReflectColumn?
 
-    val tableName = entityClass.simpleName
+  init {
+    mTableName = entityClass.simpleName
         ?: throw IllegalArgumentException("Cannot serialize entity class without name: ${entityClass.toString()}")
-    val allColumns = mutableListOf<ReflectColumn>()
-    var indexColumn: ReflectColumn? = null
 
-    getClassFields(entityClass)
-        .filter { isIgnored(it).not() }
-        .forEachIndexed { idx, field ->
-          val genericType = field.genericType
-          val converter = cupboard.getFieldConverter(genericType)
-              ?: throw IllegalArgumentException("Do not know how to convert field ${field.name}  in entity ${entityClass.simpleName} of type $genericType")
-          if (converter.columnType == null) return@forEachIndexed
-          if (field.isAccessible.not()) field.isAccessible = true
+    val columns = mutableListOf<ReflectColumn.Builder>()
 
-          val column = ReflectColumn(
-              getColumnName(field),
-              getDbIndexDef(field),
-              idx,
-              field,
-              converter as FieldConverter<in Any>)
-
-          allColumns.add(column)
-
-          // _id field + checks
-          if (BaseColumns._ID == column.name) {
-            if (column.isFinal) {
-              throw IllegalArgumentException("${entityClass.simpleName}.${BaseColumns._ID} field cannot be final")
-            }
-            if (column.field.kotlinProperty?.returnType?.isMarkedNullable?.not() ?: false) {
-              throw IllegalArgumentException("${entityClass.simpleName}.${BaseColumns._ID} field has to be nullable")
-            }
-            indexColumn = column
+    entityClass.fields
+        .filter { it.isIgnored().not() }
+        .forEach { field ->
+          val column = ReflectColumn.Builder(cupboard, field)
+          if (column.fieldConverter.columnType != null) {
+            columns += column
           }
         }
 
-    var constructor =
-        // constructor for filans (if applicable)
-        if (allColumns.filter { it.isFinal }.isNotEmpty()) {
-          if (entityClass.java.isKotlinClass().not()) {
-            throw IllegalArgumentException("${entityClass.simpleName} is not a Kotlin class and has final fields. Either ignore final fields or use Kotlin class with primary constructor")
-          }
-          val ctor = entityClass.primaryConstructor
-              ?: throw IllegalArgumentException("${entityClass.simpleName} has final fields and no primary constructor (required)")
+    // constructor for finals (if applicable)
+    if (columns.filter { it.isFinal }.isNotEmpty()) {
+      if (entityClass.java.isKotlinClass().not()) {
+        throw IllegalArgumentException("${entityClass.simpleName} is not a Kotlin class and has final fields. Either ignore final fields or use Kotlin class with primary constructor")
+      }
+      mConstructor = entityClass.primaryConstructor
+          ?: throw IllegalArgumentException("${entityClass.simpleName} has final fields and no primary constructor (required)")
+      mConstructor.parameters.forEach { param ->
+        columns.find { it.dbColumnName == param.name && it.field.type == param.type.javaType }
+            ?.apply { constructorParameter = param }
+            ?: if (param.isOptional.not()) throw IllegalArgumentException("${entityClass.simpleName} constructor parameter ${param.name} doesn't map to any final fields")
+      }
+    } else {
+      mConstructor = null
+    }
 
-          ctor.parameters.forEach { param ->
-            val column = allColumns.find { it.name == param.name && it.field.type == param.type.javaType } ?:
-                if (param.isOptional) return@forEach // Skip optionals
-                else throw IllegalArgumentException("${entityClass.simpleName} constructor parameter ${param.name} doesn't map to any final fields")
-            column.ctorParameter = param
-          }
+    mColumns = columns
+        .filter { it.isFinal.not() || it.constructorParameter != null }
+        .mapIndexed { i, builder -> builder.build(i) }
 
-          allColumns.forEach { column ->
-            if (column.isFinal && column.ctorParameter == null)
-              throw IllegalArgumentException("${entityClass.simpleName} final field ${column.name} doesn't map to constructor parameter")
-          }
-
-          ctor
-        } else {
-          null
-        }
-
-    ReflectTable(tableName, allColumns, indexColumn, constructor)
+    mIdColumn = mColumns.find { it.isIdColumn }
   }
 
-  override fun getColumns(): List<EntityConverter.Column> = mReflectTable.columns
+  override fun getColumns(): List<EntityConverter.Column> = mColumns
 
   override fun fromCursor(cursor: Cursor): T {
-    val result = if (mReflectTable.constructor != null) {
-      val map = mReflectTable.columns // Create instance using constructor with parameters
-          .filter { it.isFinal }
-          .associate { it.ctorParameter!! to it.fromCursor(cursor) }
-      mReflectTable.constructor?.callBy(map)!!
-    } else {
-      entityClass.java.newInstance()
+    val result = when {
+      mConstructor != null -> mConstructor.callBy(mColumns
+          .filter { it.constructorParameter != null }
+          .associate { it.constructorParameter!! to it.fromCursor(cursor) })
+      else -> entityClass.java.newInstance()
     }
-    mReflectTable.columns
+
+    mColumns
         .filter { it.isFinal.not() }
         .forEach { column ->
-          if (column.cursorIdx > cursor.columnCount - 1) return@forEach
-          if (cursor.isNull(column.cursorIdx)) {
+          if (column.cursorIndex > cursor.columnCount - 1) return@forEach
+          if (cursor.isNull(column.cursorIndex)) {
             if (column.field.type.isPrimitive.not()) {
               column.field.set(result, null)
             }
           } else {
-            val value = column.fieldConverter.fromCursorValue(cursor, column.cursorIdx)
+            val value = column.fromCursor(cursor)
             column.field.set(result, value)
           }
         }
@@ -128,10 +102,10 @@ class KotlinReflectiveEntityConverter<T : Any>(val cupboard: Cupboard,
   }
 
   override fun toValues(obj: T, values: ContentValues) {
-    mReflectTable.columns.forEachIndexed { idx, column ->
+    mColumns.forEachIndexed { idx, column ->
       if (column.type == EntityConverter.ColumnType.JOIN) return@forEachIndexed
       val value = column.field.get(obj)
-      if (value == null && column != mReflectTable.indexColumn) {
+      if (value == null && column != mIdColumn) {
         values.putNull(column.name)
       } else {
         column.fieldConverter.toContentValue(value, column.name, values)
@@ -140,62 +114,66 @@ class KotlinReflectiveEntityConverter<T : Any>(val cupboard: Cupboard,
   }
 
   override fun setId(id: Long?, instance: T) {
-    mReflectTable.indexColumn?.field?.set(instance, id)
+    mIdColumn?.field?.set(instance, id)
   }
 
-  override fun getId(instance: T) = mReflectTable.indexColumn?.field?.get(instance) as Long?
+  override fun getId(instance: T) = mIdColumn?.field?.get(instance) as Long?
 
-  override fun getTable() = mReflectTable.name
+  override fun getTable() = mTableName
 
-  protected fun isIgnored(field: Field) =
-      Modifier.isStatic(field.modifiers)
-          || Modifier.isTransient(field.modifiers)
-          || (mUseAnnotations && field.getAnnotation(Ignore::class.java) != null)
+  protected fun Field.isIgnored() = Modifier.isStatic(modifiers) || Modifier.isTransient(modifiers)
+      || (cupboard.isUseAnnotations && getAnnotation(Ignore::class.java) != null)
+}
 
-  protected fun getColumnName(field: Field) =
-      if (mUseAnnotations) {
-        field.getAnnotation(Column::class.java)?.value ?: field.name
-      } else {
-        field.name
-      }
+/** Reflection resolved table column */
+class ReflectColumn
+private constructor(name: String,
+                    dbIndex: Index?,
+                    val cursorIndex: Int,
+                    val field: Field,
+                    val fieldConverter: FieldConverter<in Any>,
+                    val constructorParameter: KParameter?) : EntityConverter.Column(name, fieldConverter.columnType, dbIndex) {
 
-  protected fun getDbIndexDef(field: Field) =
-      if (mUseAnnotations) {
-        field.getAnnotation(Index::class.java)
-      } else {
-        null
-      }
+  val isFinal = Modifier.isFinal(field.modifiers)
+  val isNullable = field.kotlinProperty?.returnType?.isMarkedNullable?.not() ?: false
+  val isIdColumn = name == BaseColumns._ID
 
-  protected fun getClassFields(kClass: KClass<T>) =
-      if (kClass.java.superclass == null) {
-        // optimize for the case where an entity is not inheriting from a base class.
-        kClass.java.declaredFields
-      } else {
-        val allFields = ArrayList<Field>(256)
-        var c: Class<*>? = kClass.java
-        while (c != null) {
-          allFields.addAll(c.declaredFields)
-          c = c.superclass
-        }
-        allFields.toArray(arrayOfNulls<Field>(allFields.size))
-      }
+  init {
+    if (field.isAccessible.not()) field.isAccessible = true
+    if (isIdColumn) {
+      // _id field checks
+      if (isFinal) throw IllegalArgumentException("${field.declaringClass.simpleName}.${BaseColumns._ID} field cannot be final")
+      if (isNullable) throw IllegalArgumentException("${field.declaringClass.simpleName}.${BaseColumns._ID} field has to be nullable")
+    }
+  }
 
-  /** Reflection resolved table instance */
-  private class ReflectTable<T>(val name: String,
-                                val columns: List<ReflectColumn>,
-                                val indexColumn: ReflectColumn?,
-                                val constructor: KFunction<T>?)
+  fun fromCursor(c: Cursor) = fieldConverter.fromCursorValue(c, cursorIndex)
 
-  /** Reflection resolved table column */
-  private class ReflectColumn(name: String,
-                              dbIndex: Index?,
-                              val cursorIdx: Int,
-                              val field: Field,
-                              val fieldConverter: FieldConverter<in Any>) :
-      EntityConverter.Column(name, fieldConverter.columnType, dbIndex) {
-    /** Corresponding constructor parameter, if applicable */
-    var ctorParameter: KParameter? = null
+  class Builder(val cupboard: Cupboard,
+                val field: Field) {
+    @Suppress("UNCHECKED_CAST")
+    val fieldConverter = getConverter(field)
     val isFinal = Modifier.isFinal(field.modifiers)
-    fun fromCursor(c: Cursor) = fieldConverter.fromCursorValue(c, cursorIdx)
+    val dbColumnName = getDebColumnName(field)
+
+    // Modificable params
+    var constructorParameter: KParameter? = null
+
+    fun build(cursorIndex: Int) = ReflectColumn(dbColumnName, getDbColumnIndex(field), cursorIndex, field, fieldConverter, constructorParameter)
+
+    fun getDebColumnName(field: Field) = when {
+      cupboard.isUseAnnotations -> field.getAnnotation(Column::class.java)?.value ?: field.name
+      else -> field.name
+    }
+
+    fun getDbColumnIndex(field: Field) = when {
+      cupboard.isUseAnnotations -> field.getAnnotation(Index::class.java)
+      else -> null
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    fun getConverter(field: Field) = cupboard.getFieldConverter(field.genericType) as FieldConverter<in Any>?
+        ?: throw IllegalArgumentException("Do not know how to convert field ${field.name} of type ${field.type.simpleName} in class ${field.declaringClass.simpleName} ")
   }
 }
+
