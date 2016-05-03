@@ -28,7 +28,7 @@ dependencies {
 }
 ```
 ## Usage
-### Persistence class
+Given two data classes used for persistence:
 ```koltin
 data class Book(val title: String)
 data class Author(val name: String, val lastName: String)
