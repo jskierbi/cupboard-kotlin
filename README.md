@@ -1,4 +1,5 @@
 # Cupboard Kotlin Module
+[ ![Download](https://api.bintray.com/packages/jskierbi/maven/cupboard-kotlin/images/download.svg) ](https://bintray.com/jskierbi/maven/cupboard-kotlin/_latestVersion)
 
 Kotlin language support for [Cupboard](https://bitbucket.org/littlerobots/cupboard), a simple Android SQLite persistence library.
 
