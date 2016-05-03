@@ -1,11 +1,11 @@
 # Cupboard Kotlin Module
 [ ![Download](https://api.bintray.com/packages/jskierbi/maven/cupboard-kotlin/images/download.svg) ](https://bintray.com/jskierbi/maven/cupboard-kotlin/_latestVersion)
 
-Kotlin language support for [Cupboard](https://bitbucket.org/littlerobots/cupboard), a simple Android SQLite persistence library.
+Kotlin language support for [Cupboard](https://bitbucket.org/littlerobots/cupboard) (a simple Android SQLite persistence library)
 
 ## Features
-* Proper handling of data classes and classes with constructor-level defined values
-* Convenient extension functions
+* Added handling of data classes and classes with val fields defined on constructor level (aka finals)
+* Additional extension functions for convenient cupboard confuguration and querying, using Kotlin specific syntax sugar (lambdas, reified type parameters)
 
 ## Installation (build.gradle)
 ```gradle
