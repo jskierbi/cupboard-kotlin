@@ -29,4 +29,4 @@ fun CupboardBuilder.register(vararg types: KClass<*>) = apply { types.forEach { 
 fun CupboardBuilder.register(entityConverterFactory: EntityConverterFactory) = registerEntityConverterFactory(entityConverterFactory)
 fun CupboardBuilder.register(fieldConverterFactory: FieldConverterFactory) = registerFieldConverterFactory(fieldConverterFactory)
 
-fun <T : Any> DatabaseCompartment.query(type: KClass<T>) = query(type.java)
+inline fun <reified T : Any> DatabaseCompartment.query() = query(T::class.java)
