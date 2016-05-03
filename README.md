@@ -9,12 +9,6 @@ Kotlin language support for [Cupboard](https://bitbucket.org/littlerobots/cupboa
 
 ## Installation (build.gradle)
 ```gradle
-repositories {
-  maven {
-    url  "http://dl.bintray.com/jskierbi/maven"
-  }
-}
-
 dependencies {
   compile "com.jskierbi:cupboard-kotlin:0.9.0"
   
