@@ -16,6 +16,7 @@ import java.lang.reflect.Modifier
 import kotlin.reflect.KClass
 import kotlin.reflect.KFunction
 import kotlin.reflect.KParameter
+import kotlin.reflect.full.primaryConstructor
 import kotlin.reflect.jvm.javaType
 import kotlin.reflect.jvm.kotlinProperty
 import kotlin.reflect.primaryConstructor
@@ -53,13 +54,9 @@ class KotlinReflectiveEntityConverter<T : Any>(val cupboard: Cupboard,
         }
 
     // constructor for finals (if applicable)
-    if (columns.filter { it.isFinal }.isNotEmpty()) {
-      if (entityClass.java.isKotlinClass().not()) {
-        throw IllegalArgumentException("${entityClass.simpleName} is not a Kotlin class and has final fields. Either ignore final fields or use Kotlin class with primary constructor")
-      }
+    if (entityClass.java.isKotlinClass()) {
       mConstructor = entityClass.primaryConstructor
-          ?: throw IllegalArgumentException("${entityClass.simpleName} has final fields and no primary constructor (required)")
-      mConstructor.parameters.forEach { param ->
+      mConstructor?.parameters?.forEach { param ->
         columns.find { it.dbColumnName == param.name && it.field.type == param.type.javaType }
             ?.apply { constructorParameter = param }
             ?: if (param.isOptional.not()) throw IllegalArgumentException("${entityClass.simpleName} constructor parameter ${param.name} doesn't map to any final fields")
