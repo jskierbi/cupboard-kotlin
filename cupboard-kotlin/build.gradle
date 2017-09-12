@@ -14,7 +14,7 @@ buildscript {
 apply plugin: 'com.android.library'
 apply plugin: 'kotlin-android'
 
-def cupboardKotlinLibVersion = "0.9.0"
+def cupboardKotlinLibVersion = "0.9.1"
 
 android {
   compileSdkVersion 23
