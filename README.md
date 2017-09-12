@@ -10,7 +10,7 @@ Kotlin language support for [Cupboard](https://bitbucket.org/littlerobots/cupboa
 ## Installation (build.gradle)
 ```gradle
 dependencies {
-  compile "com.jskierbi:cupboard-kotlin:0.9.0"
+  compile "com.jskierbi:cupboard-kotlin:$latest_version"
   
   // cupboard-kotlin does not include cupboard itself
   compile "nl.qbusict:cupboard:2.1.4" 
